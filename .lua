@@ -1,79 +1,309 @@
-local plrs = game:GetService("Players")
-local plr = plrs.LocalPlayer
-local camera = workspace.CurrentCamera
-local runService = game:GetService("RunService")
+--// Made by Endo / @1ay
 
-local FOV_RADIUS = 100
-local fovCircle = Drawing.new("Circle")
-fovCircle.Visible = true
-fovCircle.Thickness = 1
-fovCircle.NumSides = 64
-fovCircle.Radius = FOV_RADIUS
-fovCircle.Filled = false
-fovCircle.Transparency = 1
+--// Made by Endo / @1ay
 
-runService.RenderStepped:Connect(function()
-    local screenCenter = camera.ViewportSize / 2
-    fovCircle.Position = Vector2.new(screenCenter.X, screenCenter.Y)
-    fovCircle.Color = Color3.fromHSV(tick() % 5 / 5, 1, 1)
-end)
+--// Made by Endo / @1ay
 
-local function notBehindWall(target)
-    local raycastParams = RaycastParams.new()
-    raycastParams.FilterDescendantsInstances = {plr.Character}
-    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-    local direction = (target.Position - camera.CFrame.Position)
-    local result = workspace:Raycast(camera.CFrame.Position, direction, raycastParams)
-    if not result or result.Instance:IsDescendantOf(target.Parent) then
-        return true
-    end
-    return false
-end
+--// Made by Endo / @1ay
 
-function getClosestPlayerToCenter()
-    local target = nil
-    local maxDist = FOV_RADIUS
-    local screenCenter = camera.ViewportSize / 2
-    
-    for _, v in pairs(plrs:GetPlayers()) do
-        if v ~= plr and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then
-            local head = v.Character:FindFirstChild("Head")
-            if head then
-                local pos, vis = camera:WorldToViewportPoint(head.Position)
-                if vis then
-                    local screenPos = Vector2.new(pos.X, pos.Y)
-                    local dist = (screenCenter - screenPos).Magnitude
-                    
-                    if dist < maxDist then
-                        if notBehindWall(head) then
-                            target = head
-                            maxDist = dist
-                        end
-                    end
-                end
+--// Made by Endo / @1ay
+
+getgenv().Prediction = 0.109
+
+getgenv().ResolveKey = "C" -- Key to enable resolver 
+
+getgenv().Smoothing = 0.05 -- Aiming Smoothness 
+
+getgenv().JumpSmoothness = 1 -- Jumping smoothness 
+
+getgenv().Diameter = -0.2 -- // jump offset 
+
+getgenv().Radius = 150 -- silent aim fov/circle/radius
+
+local resolver = false
+
+local silentAim = true
+
+local client = game.Players.LocalPlayer
+
+local camera = game.Workspace.CurrentCamera
+
+local Resolvedvelocity
+
+local target, aiming
+
+local UserInputService = game:GetService("UserInputService")
+
+UserInputService.InputBegan:Connect(function(input, processed)
+
+    if not processed then
+
+        if input.KeyCode == Enum.KeyCode[getgenv().ResolveKey:upper()] then
+
+            resolver = not resolver
+
+            game.StarterGui:SetCore("SendNotification", {
+
+                Title = tostring(resolver),
+
+                Text = "Resolve",
+
+                Duration = 0.05
+
+            })
+
+            if not resolver then
+
+                aiming = false
+
+                target = nil
+
             end
+
         end
+
     end
-    return target
+
+end)
+
+local Smoothness = 5
+
+local Stored = {}
+
+local Value = 1
+
+local recalculatedVelocity = function(player)
+
+    local Tick = tick()
+
+    Stored[Value] = {
+
+        pos = player.Position,
+
+        time = Tick,
+
+    }
+
+    Value = Value + 1
+
+    if Value > Smoothness then
+
+        Value = 1
+
+    end
+
+    local Pos = Vector3.new()
+
+    local Time = 0
+
+    for i = 1, Smoothness do
+
+        local Data = Stored[i]
+
+        if Data then
+
+            Pos = Pos + Data.pos
+
+            Time = Time + Data.time
+
+        end
+
+    end
+
+    if Stored[Value] then
+
+        local velocity = (player.Position - Stored[Value].pos) / (Tick - Stored[Value].time)
+
+        return velocity
+
+    end
+
 end
 
-local gmt = getrawmetatable(game)
-setreadonly(gmt, false)
-local oldNamecall = gmt.__namecall
+function wallCheck(targetPosition, ignoreList)
 
-gmt.__namecall = newcclosure(function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
-    
-    if method == "FireServer" and tostring(self) == "HitPart" then
-        local closest = getClosestPlayerToCenter()
-        if closest then
-            args[1] = closest
-            args[2] = closest.Position
-            return oldNamecall(self, unpack(args))
+    ignoreList = ignoreList or {}
+
+    table.insert(ignoreList, game.Players.LocalPlayer.Character)
+
+    local HitPoint, hitPosition = workspace:FindPartOnRayWithIgnoreList(
+
+        Ray.new(camera.CFrame.p, (targetPosition - camera.CFrame.p).Unit * 1000),
+
+        ignoreList
+
+    )
+
+    return HitPoint == nil and true or (hitPosition - camera.CFrame.p).Magnitude >= (targetPosition - camera.CFrame.p).Magnitude
+
+end
+
+local function isPlayerKoed(player)
+
+    if player and player.Character and player.Character:FindFirstChild("Humanoid") then
+
+        local humanoid = player.Character:FindFirstChild("Humanoid")
+
+        if humanoid.Health <= 1 then
+
+            return true
+
         end
+
     end
-    
-    return oldNamecall(self, ...)
+
+    return false
+
+end
+
+local function lockOnToNearestPlayer()
+
+    local closestPlayer = nil
+
+    local closestDistance = getgenv().Radius * 3
+
+    for _, v in pairs(game.Players:GetPlayers()) do
+
+        if v ~= client and v.Character and v.Character:FindFirstChild("Humanoid") and not isPlayerKoed(v) then
+
+            local character = v.Character
+
+            local rootPart = character:FindFirstChild("HumanoidRootPart")
+
+            if rootPart then
+
+                local screenPos, Visible = camera:WorldToViewportPoint(rootPart.Position)
+
+                if Visible then
+
+                    local distToCenter = (Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2) - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
+
+                    if distToCenter < closestDistance and wallCheck(rootPart.Position, {client, v.Character}) then
+
+                        closestPlayer = v
+
+                        closestDistance = distToCenter
+
+                    end
+
+                end
+
+            end
+
+        end
+
+    end
+
+    if closestPlayer then
+
+        target = closestPlayer
+
+    else
+
+        target = nil
+
+    end
+
+end
+
+local aimingMethod = function(player)
+
+    if not player or not player.Character then
+
+        return
+
+    end
+
+    local velocity = Resolvedvelocity or player.Character.HumanoidRootPart.Velocity
+
+    local isJumping = player.Character.HumanoidRootPart.Velocity.Y > 0 and
+
+                        (player.Character.Humanoid:GetState() == Enum.HumanoidStateType.Freefall or
+
+                        player.Character.Humanoid:GetState() == Enum.HumanoidStateType.Jumping)
+
+    local Position = isJumping and (player.Character.LowerTorso.Position + Vector3.new(0, getgenv().Diameter, 0)) or player.Character.HumanoidRootPart.Position
+
+    local current = player.Character.HumanoidRootPart.Position
+
+    local result = current:Lerp(Position, getgenv().JumpSmoothness)
+
+    return result + velocity * getgenv().Prediction
+
+end
+
+game:GetService("RunService").RenderStepped:Connect(function ()
+
+    if resolver and target ~= nil then
+
+        Resolvedvelocity = recalculatedVelocity(target.Character.HumanoidRootPart)
+
+    else
+
+        Resolvedvelocity = nil
+
+    end
+
+    if silentAim then
+
+        lockOnToNearestPlayer()
+
+    end
+
 end)
-setreadonly(gmt, true)
+
+local function onToolActivated()
+
+    if target then
+
+        local position = aimingMethod(target)
+
+        game.ReplicatedStorage.MAINEVENT:FireServer("MOUSE", position)
+
+    end
+
+end
+
+local function onCharacterAdded(character)
+
+    character.DescendantAdded:Connect(function(descendant)
+
+        if descendant:IsA("Tool") then
+
+            descendant.Activated:Connect(onToolActivated)
+
+        end
+
+    end)
+
+end
+
+game.Players.LocalPlayer.CharacterAdded:Connect(onCharacterAdded)
+
+if game.Players.LocalPlayer.Character then
+
+    onCharacterAdded(game.Players.LocalPlayer.Character)
+
+end
+
+local function easing(t)
+
+    return 1 - (1 - t) * (1 - t) * (1 - t)
+
+end
+
+game:GetService("RunService").Heartbeat:Connect(function()
+
+    if aiming and target ~= nil then
+
+        local position = aimingMethod(target)
+
+        local lookAt = CFrame.new(camera.CFrame.Position, position)
+
+        local new = camera.CFrame:Lerp(lookAt, easing(getgenv().Smoothing))
+
+        camera.CFrame = new
+
+    end
+
+end)
